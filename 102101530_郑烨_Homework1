@@ -1,0 +1,199 @@
+在这次作业中，首先需要实现的功能是判断点是否在三角形内部，其次对三角形实现栅格化处理，实现z-buffer算法正确绘画三角形，最后使用super-sampling来实现抗锯齿功能
+现在我们来实现第一个函数，即判断点是否在三角形内部（假设这个三角形为abc，这个点为point）：
+1.获取三角形三条边的向量坐标，其中三角形的三个顶点坐标分别存放在_v[x]数组中
+———————————————————————————————————————————————————
+    Eigen::Vector3f point(x, y, 0), ab, bc, ca; 
+    ab = _v[1] - _v[0];
+    bc = _v[2] - _v[1];
+    ca = _v[0] - _v[2];
+———————————————————————————————————————————————————
+
+2.获取三角形的三个顶点分别与point这个点所连线构成的向量坐标
+———————————————————————————————————————————————————
+    Eigen::Vector3f bp, cp, ap;
+    bp = point - _v[1];
+    cp = point - _v[2];
+    ap = point - _v[0];
+———————————————————————————————————————————————————    
+
+3.获取连线向量与三角形三边向量叉乘的方向
+———————————————————————————————————————————————————
+    int res1, res2, res3;
+    res1 = ab.cross(bp).z();
+    res2 = bc.cross(cp).z();
+    res3 = ca.cross(ap).z();
+———————————————————————————————————————————————————
+
+4.通过判读叉乘方向是否一致来判断点是否在三角形内部
+———————————————————————————————————————————————————
+return ((res1 > 0 && res2 > 0 && res3 > 0) || (res1 < 0 && res2 < 0 && res3 < 0));
+———————————————————————————————————————————————————
+
+5.完整代码如下
+———————————————————————————————————————————————————
+static bool insideTriangle(float x, float y, const Vector3f* _v)
+{
+    // TODO : Implement this function to check if the point (x, y) is inside the triangle represented by _v[0], _v[1], _v[2]
+    //三角形三条边向量
+    Eigen::Vector3f point(x, y, 0), ab, bc, ca; 
+    ab = _v[1] - _v[0];
+    bc = _v[2] - _v[1];
+    ca = _v[0] - _v[2];
+    //三角形三个顶点与point的连线向量
+    Eigen::Vector3f bp, cp, ap;
+    bp = point - _v[1];
+    cp = point - _v[2];
+    ap = point - _v[0];
+    //获取叉乘的方向
+    int res1, res2, res3;
+    res1 = ab.cross(bp).z();
+    res2 = bc.cross(cp).z();
+    res3 = ca.cross(ap).z();
+    //方向相等则说明点在三角形内部
+    return ((res1 > 0 && res2 > 0 && res3 > 0) || (res1 < 0 && res2 < 0 && res3 < 0));  
+}
+———————————————————————————————————————————————————
+
+然后我们来进行对三角形栅格化的处理并实现z-buffer算法正确绘画三角形，最后使用super-sampling来实现抗锯齿功能
+1.获取三角形的三个顶点信息
+———————————————————————————————————————————————————
+auto v = t.toVector4();
+———————————————————————————————————————————————————
+
+2.获取三角形的最高点和最低点
+———————————————————————————————————————————————————
+Eigen::Vector2f min_p, max_p;
+min_p.x() = MIN(MIN(v[0].x(), v[1].x()), v[2].x());
+min_p.y() = MIN(MIN(v[0].y(), v[1].y()), v[2].y());
+max_p.x() = MAX(MAX(v[0].x(), v[1].x()), v[2].x());
+max_p.y() = MAX(MAX(v[0].y(), v[1].y()), v[2].y());
+———————————————————————————————————————————————————
+
+3.创建MSAA超采样列表
+———————————————————————————————————————————————————
+std::vector<Eigen::Vector2f> super_sample_list
+{
+    {0.25, 0.25},
+    {0.75, 0.25},
+    {0.25, 0.75},
+    {0.75, 0.75},
+};
+———————————————————————————————————————————————————
+
+4.遍历三角形内部的每一个像素，并使用MSAA抗锯齿算法和z-buffer深度缓存算法
+———————————————————————————————————————————————————
+float alpha, beta, gamma;
+for (int i = min_p.x(); i <= max_p.x(); i++) 
+{
+    for (int j = min_p.y(); j <= max_p.y(); j++) 
+    {
+        int count = 0;
+        float min_depth = 0x3f3f3f3f;
+        for (int k = 0; k < 4; k++) 
+        {
+            if (insideTriangle((float)i + super_sample_list[k][0], (float)j + super_sample_list[k][1], t.v)) 
+            {
+                std::tie(alpha, beta, gamma) = computeBarycentric2D(i, j, t.v);
+                float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+                float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+                z_interpolated *= w_reciprocal;
+                if (z_interpolated < min_depth) 
+                {
+                    min_depth = z_interpolated;
+                }
+                //Z-buffer深度缓存算法
+                if (z_interpolated < sample_list_depth_buf[get_index(i, j)][k]) 
+                {
+                    sample_list_depth_buf[get_index(i, j)][k] = z_interpolated;
+                    sample_list_frame_buf[get_index(i, j)][k] = t.getColor();
+                }
+                count++;
+            }
+        }
+    }
+}
+———————————————————————————————————————————————————
+
+5.对像素缓存进行上色
+———————————————————————————————————————————————————
+if (count != 0) 
+{
+    Eigen::Vector3f color = { 0, 0, 0 };
+    for (int k = 0; k < 4; k++) 
+    {
+        color += sample_list_frame_buf[get_index(i, j)][k];
+    }
+    set_pixel(Eigen::Vector3f((float)i, (float)j, min_depth), color / 4.0);
+    depth_buf[get_index(i, j)] = min_depth;
+}
+——————————————————————————————————————————————————— 
+
+6.完整代码如下
+——————————————————————————————————————————————————— 
+void rst::rasterizer::rasterize_triangle(const Triangle& t) 
+{
+    
+    //获取三角形的三个顶点
+    auto v = t.toVector4();
+
+    //获取三角形边界值
+    Eigen::Vector2f min_p, max_p;
+    min_p.x() = MIN(MIN(v[0].x(), v[1].x()), v[2].x());
+    min_p.y() = MIN(MIN(v[0].y(), v[1].y()), v[2].y());
+    max_p.x() = MAX(MAX(v[0].x(), v[1].x()), v[2].x());
+    max_p.y() = MAX(MAX(v[0].y(), v[1].y()), v[2].y());
+
+    float alpha, beta, gamma;
+
+    if (MSAA) {
+
+        //2*2超采样
+        std::vector<Eigen::Vector2f> super_sample_list
+        {
+            {0.25, 0.25},
+            {0.75, 0.25},
+            {0.25, 0.75},
+            {0.75, 0.75},
+        };
+        for (int i = min_p.x(); i <= max_p.x(); i++) 
+        {
+            for (int j = min_p.y(); j <= max_p.y(); j++) 
+            {
+                int count = 0;
+                float min_depth = 0x3f3f3f3f;
+                for (int k = 0; k < 4; k++) 
+                {
+                    if (insideTriangle((float)i + super_sample_list[k][0], (float)j + super_sample_list[k][1], t.v)) 
+                    {
+                        std::tie(alpha, beta, gamma) = computeBarycentric2D(i, j, t.v);
+                        float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+                        float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+                        z_interpolated *= w_reciprocal;
+                        if (z_interpolated < min_depth) 
+                        {
+                            min_depth = z_interpolated;
+                        }
+                        //Z-buffer深度缓存算法
+                        if (z_interpolated < sample_list_depth_buf[get_index(i, j)][k]) 
+                        {
+                            sample_list_depth_buf[get_index(i, j)][k] = z_interpolated;
+                            sample_list_frame_buf[get_index(i, j)][k] = t.getColor();
+                        }
+                        count++;
+                    }
+                }
+                if (count != 0) 
+                {
+                    Eigen::Vector3f color = { 0, 0, 0 };
+                    for (int k = 0; k < 4; k++) 
+                    {
+                        color += sample_list_frame_buf[get_index(i, j)][k];
+                    }
+                    set_pixel(Eigen::Vector3f((float)i, (float)j, min_depth), color / 4.0);
+                    depth_buf[get_index(i, j)] = min_depth;
+                }
+            }
+        }
+    }
+}
+——————————————————————————————————————————————————— 
